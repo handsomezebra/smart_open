@@ -205,7 +205,7 @@ class SmartOpenReadTest(unittest.TestCase):
         fpath = os.path.join(CURR_DIR, 'test_data/crime-and-punishment.txt')
         with mock.patch('io.open') as mock_open:
             smart_open.smart_open(fpath, 'r').read()
-        mock_open.assert_called_with(fpath, 'r')
+        mock_open.assert_called_with(fpath, 'r', errors='strict', encoding=None)
 
     def test_open_with_keywords(self):
         """This test captures Issue #142."""
@@ -320,21 +320,21 @@ class SmartOpenReadTest(unittest.TestCase):
         smart_open_object = smart_open.smart_open(prefix+full_path, read_mode)
         smart_open_object.__iter__()
         # called with the correct path?
-        mock_smart_open.assert_called_with(full_path, read_mode)
+        mock_smart_open.assert_called_with(full_path, read_mode, errors='strict', encoding=None)
 
         full_path = '/tmp/test#hash##more.txt'
         read_mode = "rb"
         smart_open_object = smart_open.smart_open(prefix+full_path, read_mode)
         smart_open_object.__iter__()
         # called with the correct path?
-        mock_smart_open.assert_called_with(full_path, read_mode)
+        mock_smart_open.assert_called_with(full_path, read_mode, errors='strict', encoding=None)
 
         full_path = 'aa#aa'
         read_mode = "rb"
         smart_open_object = smart_open.smart_open(full_path, read_mode)
         smart_open_object.__iter__()
         # called with the correct path?
-        mock_smart_open.assert_called_with(full_path, read_mode)
+        mock_smart_open.assert_called_with(full_path, read_mode, errors='strict', encoding=None)
 
         short_path = "~/tmp/test.txt"
         full_path = os.path.expanduser(short_path)
@@ -342,7 +342,7 @@ class SmartOpenReadTest(unittest.TestCase):
         smart_open_object = smart_open.smart_open(prefix+short_path, read_mode, errors='strict')
         smart_open_object.__iter__()
         # called with the correct expanded path?
-        mock_smart_open.assert_called_with(full_path, read_mode, errors='strict')
+        mock_smart_open.assert_called_with(full_path, read_mode, errors='strict', encoding=None)
 
     # couldn't find any project for mocking up HDFS data
     # TODO: we want to test also a content of the files, not just fnc call params
@@ -465,26 +465,33 @@ class SmartOpenReadTest(unittest.TestCase):
 class SmartOpenS3KwargsTest(unittest.TestCase):
     def test_no_kwargs(self, mock_session):
         smart_open.smart_open('s3://mybucket/mykey')
-        mock_session.assert_called_with(profile_name=None)
-        mock_session.return_value.resource.assert_called_with('s3')
+        mock_session.assert_called_with(
+            profile_name=None, aws_access_key_id=None, aws_secret_access_key=None
+        )
+        mock_session.return_value.resource.assert_called_with('s3', endpoint_url=None)
 
     def test_credentials(self, mock_session):
         smart_open.smart_open('s3://access_id:access_secret@mybucket/mykey')
-        mock_session.assert_called_with(profile_name=None)
-        mock_session.return_value.resource.assert_called_with(
-            's3', aws_access_key_id='access_id', aws_secret_access_key='access_secret'
+        mock_session.assert_called_with(
+            profile_name=None, aws_access_key_id='access_id', aws_secret_access_key='access_secret'
         )
+        mock_session.return_value.resource.assert_called_with('s3', endpoint_url=None)
 
     def test_profile(self, mock_session):
         smart_open.smart_open('s3://mybucket/mykey', profile_name='my_credentials')
-        mock_session.assert_called_with(profile_name='my_credentials')
-        mock_session.return_value.resource.assert_called_with('s3')
+        mock_session.assert_called_with(
+            profile_name='my_credentials', aws_access_key_id=None, aws_secret_access_key=None
+        )
+        mock_session.return_value.resource.assert_called_with('s3', endpoint_url=None)
 
     def test_host(self, mock_session):
         smart_open.smart_open("s3://access_id:access_secret@mybucket/mykey", host='aa.domain.com')
+        mock_session.assert_called_with(
+            aws_access_key_id='access_id', aws_secret_access_key='access_secret',
+            profile_name=None,
+        )
         mock_session.return_value.resource.assert_called_with(
-            's3', aws_access_key_id='access_id', aws_secret_access_key='access_secret',
-            endpoint_url='http://aa.domain.com'
+            's3', endpoint_url='http://aa.domain.com'
         )
 
 
@@ -514,18 +521,18 @@ class SmartOpenTest(unittest.TestCase):
         with mock.patch('io.open', mock.Mock(return_value=io.StringIO(as_text))) as mock_open:
             with smart_open.smart_open("blah", "r", encoding='utf-8') as fin:
                 self.assertEqual(fin.read(), as_text)
-                mock_open.assert_called_with("blah", "r", encoding='utf-8')
+                mock_open.assert_called_with("blah", "r", encoding='utf-8', errors='strict')
 
         with mock.patch('io.open', mock.Mock(return_value=io.BytesIO(as_bytes))) as mock_open:
             with smart_open.smart_open("blah", "rb") as fin:
                 self.assertEqual(fin.read(), as_bytes)
-                mock_open.assert_called_with("blah", "rb")
+                mock_open.assert_called_with("blah", "rb", encoding=None, errors='strict')
 
         short_path = "~/blah"
         full_path = os.path.expanduser(short_path)
         with mock.patch('io.open', mock.Mock(return_value=io.BytesIO(as_bytes))) as mock_open:
             with smart_open.smart_open(short_path, "rb") as fin:
-                mock_open.assert_called_with(full_path, "rb")
+                mock_open.assert_called_with(full_path, "rb", encoding=None, errors='strict')
 
         # correct write modes, incorrect scheme
         self.assertRaises(NotImplementedError, smart_open.smart_open, "hdfs:///blah.txt", "wb+")
@@ -535,22 +542,22 @@ class SmartOpenTest(unittest.TestCase):
         # correct write mode, correct file:// URI
         with mock.patch('io.open', mock.Mock(return_value=io.StringIO(as_text))) as mock_open:
             with smart_open.smart_open("blah", "w", encoding='utf-8') as fout:
-                mock_open.assert_called_with("blah", "w", encoding='utf-8')
+                mock_open.assert_called_with("blah", "w", encoding='utf-8', errors='strict')
                 fout.write(as_text)
 
         with mock.patch('io.open', mock.Mock(return_value=io.StringIO(as_text))) as mock_open:
             with smart_open.smart_open("/some/file.txt", "w", encoding='utf-8') as fout:
-                mock_open.assert_called_with("/some/file.txt", "w", encoding='utf-8')
+                mock_open.assert_called_with("/some/file.txt", "w", encoding='utf-8', errors='strict')
                 fout.write(as_text)
 
         with mock.patch('io.open', mock.Mock(return_value=io.StringIO(as_text))) as mock_open:
             with smart_open.smart_open("/some/file.txt", "w+", encoding='utf-8') as fout:
-                mock_open.assert_called_with("/some/file.txt", "w+", encoding='utf-8')
+                mock_open.assert_called_with("/some/file.txt", "w+", encoding='utf-8', errors='strict')
                 fout.write(as_text)
 
         with mock.patch('io.open', mock.Mock(return_value=io.BytesIO(as_bytes))) as mock_open:
             with smart_open.smart_open("/some/file.txt", "wb+") as fout:
-                mock_open.assert_called_with("/some/file.txt", "wb+")
+                mock_open.assert_called_with("/some/file.txt", "wb+", encoding=None, errors='strict')
                 fout.write(as_bytes)
 
     @mock.patch('boto3.Session')
@@ -885,7 +892,11 @@ class S3OpenTest(unittest.TestCase):
 
         with mock.patch('smart_open.smart_open_s3.open') as mock_open:
             smart_open.smart_open("s3://bucket/key.gz", "wb")
-            mock_open.assert_called_with('bucket', 'key.gz', 'wb')
+            mock_open.assert_called_with(
+                'bucket', 'key.gz', 'wb',
+                aws_access_key_id=None, aws_secret_access_key=None, profile_name=None,
+                endpoint_url=None,
+            )
 
     @mock_s3
     def test_gzip_read_mode(self):
@@ -900,7 +911,11 @@ class S3OpenTest(unittest.TestCase):
 
         with mock.patch('smart_open.smart_open_s3.open') as mock_open:
             smart_open.smart_open(key, "r")
-            mock_open.assert_called_with('bucket', 'key.gz', 'rb')
+            mock_open.assert_called_with(
+                'bucket', 'key.gz', 'rb',
+                aws_access_key_id=None, aws_secret_access_key=None, profile_name=None,
+                endpoint_url=None,
+            )
 
     @mock_s3
     def test_read_encoding(self):
