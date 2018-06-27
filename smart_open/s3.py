@@ -28,7 +28,7 @@ except ImportError:
 START = 0
 CURRENT = 1
 END = 2
-WHENCE_CHOICES = (START, CURRENT, END)
+WHENCE_CHOICES = [START, CURRENT, END]
 
 DEFAULT_MIN_PART_SIZE = 50 * 1024**2
 """Default minimum part size for S3 multipart uploads"""
