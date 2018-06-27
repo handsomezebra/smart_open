@@ -3,15 +3,12 @@ import logging
 
 import requests
 
+from smart_open.util import START, CURRENT, END, WHENCE_CHOICES, DEFAULT_BUFFER_SIZE, _range_string, _clamp
+
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
-DEFAULT_BUFFER_SIZE = 128 * 1024
-
-START = 0
-CURRENT = 1
-END = 2
-WHENCE_CHOICES = [START, CURRENT, END]
 
 _HEADERS = {'Accept-Encoding': 'identity'}
 """The headers we send to the server with every HTTP request.
@@ -20,9 +17,6 @@ For now, we ask the server to send us the files as they are.
 Sometimes, servers compress the file for more efficient transfer, in which case
 the client (us) has to decompress them with the appropriate algorithm.
 """
-
-def _clamp(value, minval, maxval):
-    return max(min(value, maxval), minval)
 
 
 class BufferedInputBase(io.BufferedIOBase):
@@ -239,7 +233,7 @@ class SeekableBufferedInputBase(BufferedInputBase):
         headers = _HEADERS.copy()
 
         if start_pos is not None:
-            headers.update({"range": f"bytes={start_pos}-"})
+            headers.update({"range": _range_string(start_pos)})
 
         response = requests.get(self.url, auth=self.auth, stream=True, headers=headers)
 
