@@ -31,6 +31,8 @@ import requests
 import importlib
 import io
 import warnings
+import tarfile
+import zipfile
 
 # Import ``pathlib`` if the builtin ``pathlib`` or the backport ``pathlib2`` are
 # available. The builtin ``pathlib`` will be imported with higher precedence.
@@ -88,6 +90,7 @@ Uri = collections.namedtuple(
     (
         'scheme',
         'uri_path',
+        'fragment',
         'bucket_id',
         'key_id',
         'port',
@@ -109,6 +112,21 @@ bucket_id is only for S3.
 # https://stackoverflow.com/questions/11351032/namedtuple-and-default-values-for-optional-keyword-arguments
 #
 Uri.__new__.__defaults__ = (None,) * len(Uri._fields)
+
+def get_compression_ext(uri_path):
+    """
+    returning extention of uri_path if it's compressed format
+    """
+    name, ext = P.splitext(uri_path)
+    if ext in [".gz", ".bz2"]:
+        _, ext2 = P.splitext(name)
+        if ext2 == ".tar":
+            ext = ext2 + ext
+    elif ext in [".zip", ".tgz"]:
+        pass
+    else:
+        ext = ""
+    return ext
 
 
 def smart_open(uri, mode="rb", **kw):
@@ -228,11 +246,11 @@ def smart_open(uri, mode="rb", **kw):
                        'a': 'ab', 'a+': 'ab+'}[mode]
     except KeyError:
         binary_mode = mode
-    binary, filename = _open_binary_stream(uri, binary_mode, **kw)
+    binary, compression_ext, fragment = _open_binary_stream(uri, binary_mode, **kw)
     if ignore_extension:
         decompressed = binary
     else:
-        decompressed = _compression_wrapper(binary, filename, mode)
+        decompressed = _compression_wrapper(binary, compression_ext, fragment, mode)
 
     if 'b' not in mode or explicit_encoding is not None:
         errors = kw.pop('errors', 'strict')
@@ -269,9 +287,9 @@ def _shortcut_open(uri, mode, **kw):
     if parsed_uri.scheme != 'file':
         return None
 
-    _, extension = P.splitext(parsed_uri.uri_path)
+    compression_ext = get_compression_ext(parsed_uri.uri_path)
     ignore_extension = kw.get('ignore_extension', False)
-    if extension in ('.gz', '.bz2') and not ignore_extension:
+    if compression_ext and not ignore_extension:
         return None
 
     open_kwargs = {}
@@ -308,22 +326,23 @@ def _open_binary_stream(uri, mode, **kw):
     if isinstance(uri, six.string_types):
         # this method just routes the request to classes handling the specific storage
         # schemes, depending on the URI protocol in `uri`
-        filename = uri.split('/')[-1]
         parsed_uri = _parse_uri(uri)
+        ext = get_compression_ext(parsed_uri.uri_path)
+        fragment = parsed_uri.fragment
         unsupported = "%r mode not supported for %r scheme" % (mode, parsed_uri.scheme)
 
         if parsed_uri.scheme in ("file", ):
             # local files -- both read & write supported
             # compression, if any, is determined by the filename extension (.gz, .bz2)
             fobj = io.open(parsed_uri.uri_path, mode)
-            return fobj, filename
+            return fobj, ext, fragment
         elif parsed_uri.scheme in ("s3", "s3n", 's3u'):
-            return _s3_open_uri(parsed_uri, mode, **kw), filename
+            return _s3_open_uri(parsed_uri, mode, **kw), ext, fragment
         elif parsed_uri.scheme in ("hdfs", ):
             if mode == 'rb':
-                return smart_open_hdfs.CliRawInputBase(parsed_uri.uri_path), filename
+                return smart_open_hdfs.CliRawInputBase(parsed_uri.uri_path), ext, fragment
             elif mode == 'wb':
-                return smart_open_hdfs.CliRawOutputBase(parsed_uri.uri_path), filename
+                return smart_open_hdfs.CliRawOutputBase(parsed_uri.uri_path), ext, fragment
             else:
                 raise NotImplementedError(unsupported)
         elif parsed_uri.scheme in ("webhdfs", ):
@@ -333,15 +352,14 @@ def _open_binary_stream(uri, mode, **kw):
                 fobj = smart_open_webhdfs.BufferedOutputBase(parsed_uri.uri_path, **kw)
             else:
                 raise NotImplementedError(unsupported)
-            return fobj, filename
+            return fobj, ext, fragment
         elif parsed_uri.scheme.startswith('http'):
             #
             # The URI may contain a query string and fragments, which interfere
             # with out compressed/uncompressed estimation.
             #
-            filename = P.basename(urlparse.urlparse(uri).path)
             if mode == 'rb':
-                return smart_open_http.SeekableBufferedInputBase(uri, **kw), filename
+                return smart_open_http.SeekableBufferedInputBase(parsed_uri.uri_path, **kw), ext, fragment
             else:
                 raise NotImplementedError(unsupported)
         else:
@@ -354,11 +372,11 @@ def _open_binary_stream(uri, mode, **kw):
         host = kw.pop('host', None)
         if host is not None:
             kw['endpoint_url'] = 'http://' + host
-        return smart_open_s3.open(uri.bucket.name, uri.name, mode, **kw), uri.name
+        return smart_open_s3.open(uri.bucket.name, uri.name, mode, **kw), uri.name, ""
     elif hasattr(uri, 'read'):
         # simply pass-through if already a file-like
         filename = '/tmp/unknown'
-        return uri, filename
+        return uri, filename, ""
     else:
         raise TypeError('don\'t know how to handle uri %s' % repr(uri))
 
@@ -412,7 +430,7 @@ def _parse_uri(uri_as_string):
         if '://' not in uri_as_string:
             # no protocol given => assume a local file
             uri_as_string = 'file://' + uri_as_string
-    parsed_uri = urlsplit(uri_as_string, allow_fragments=False)
+    parsed_uri = urlsplit(uri_as_string, allow_fragments=True)
 
     if parsed_uri.scheme == "hdfs":
         return _parse_uri_hdfs(parsed_uri)
@@ -423,7 +441,7 @@ def _parse_uri(uri_as_string):
     elif parsed_uri.scheme in ('file', '', None):
         return _parse_uri_file(parsed_uri)
     elif parsed_uri.scheme.startswith('http'):
-        return Uri(scheme=parsed_uri.scheme, uri_path=uri_as_string)
+        return _parse_uri_http(parsed_uri)
     else:
         raise NotImplementedError(
             "unknown URI scheme %r in %r" % (parsed_uri.scheme, uri_as_string)
@@ -488,8 +506,10 @@ def _parse_uri_s3x(parsed_uri):
         # Each label must start and end with a lowercase letter or a number.
         raise RuntimeError("invalid S3 URI: %s" % str(parsed_uri))
 
+    uri_path = parsed_uri._replace(fragment="", query="").geturl()
     return Uri(
-        scheme=parsed_uri.scheme, bucket_id=bucket_id, key_id=key_id,
+        scheme=parsed_uri.scheme, uri_path=uri_path, fragment=parsed_uri.fragment, 
+        bucket_id=bucket_id, key_id=key_id,
         port=port, host=host, ordinary_calling_format=ordinary_calling_format,
         access_id=access_id, access_secret=access_secret
     )
@@ -499,13 +519,16 @@ def _parse_uri_file(parsed_uri):
     assert parsed_uri.scheme in (None, '', 'file')
     uri_path = parsed_uri.netloc + parsed_uri.path
     # '~/tmp' may be expanded to '/Users/username/tmp'
-    uri_path = os.path.expanduser(uri_path)
+    uri_path = P.expanduser(uri_path)
 
     if not uri_path:
         raise RuntimeError("invalid file URI: %s" % uri)
 
-    return Uri(scheme='file', uri_path=uri_path)
+    return Uri(scheme='file', uri_path=uri_path, fragment=parsed_uri.fragment)
 
+def _parse_uri_http(parsed_uri):
+    uri_path = parsed_uri._replace(fragment="", query="").geturl()
+    return Uri(scheme=parsed_uri.scheme, uri_path=uri_path, fragment=parsed_uri.fragment)
 
 def _need_to_buffer(file_obj, mode, ext):
     """Returns True if we need to buffer the whole file in memory in order to proceed."""
@@ -517,10 +540,16 @@ def _need_to_buffer(file_obj, mode, ext):
         # .seekable, but have a .seek method instead.
         #
         is_seekable = hasattr(file_obj, 'seek')
-    return six.PY2 and mode.startswith('r') and ext in ('.gz', '.bz2') and not is_seekable
+
+    if ext in (".gz", ".bz2"):
+        return six.PY2 and mode.startswith('r') and not is_seekable
+    elif ext in (".tgz", ".tar.gz", ".tar.bz2", ".zip"):
+        return not is_seekable
+    else:
+        return False
 
 
-def _compression_wrapper(file_obj, filename, mode):
+def _compression_wrapper(file_obj, compression_ext, fragment, mode):
     """
     This function will wrap the file_obj with an appropriate
     [de]compression mechanism based on the extension of the filename.
@@ -531,16 +560,23 @@ def _compression_wrapper(file_obj, filename, mode):
     If the filename extension isn't recognized, will simply return the original
     file_obj.
     """
-    _, ext = os.path.splitext(filename)
-
-    if _need_to_buffer(file_obj, mode, ext):
+    if _need_to_buffer(file_obj, mode, compression_ext):
         warnings.warn('streaming gzip support unavailable, see %s' % _ISSUE_189_URL)
         file_obj = io.BytesIO(file_obj.read())
 
-    if ext == '.bz2':
+    if compression_ext == '.bz2':
         return BZ2File(file_obj, mode)
-    elif ext == '.gz':
+    elif compression_ext == '.gz':
         return gzip.GzipFile(fileobj=file_obj, mode=mode)
+    elif compression_ext in ('.tgz', ".tar.gz"):
+        tar = tarfile.open(fileobj=file_obj, mode=mode[0] + ":gz")
+        return tar.extractfile(fragment)
+    elif compression_ext == '.tar.bz2':
+        tar = tarfile.open(fileobj=file_obj, mode=mode[0] + ":bz2")
+        return tar.extractfile(fragment)
+    elif compression_ext == '.zip':
+        zf = zipfile.ZipFile(file_obj, mode=mode[0])
+        return zf.open(fragment, mode=mode[0])
     else:
         return file_obj
 

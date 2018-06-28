@@ -140,14 +140,46 @@ class SmartOpenHttpTest(unittest.TestCase):
             data = infile.read()
 
         with gzip.GzipFile(fpath) as fin:
-            expected_hash = hashlib.md5(fin.read()).hexdigest()
+            expected_data = fin.read()
 
         responses.add(responses.GET, "http://127.0.0.1/data.gz", body=data, stream=True)
         smart_open_object = smart_open.smart_open("http://127.0.0.1/data.gz?some_param=some_val")
 
-        m = hashlib.md5(smart_open_object.read())
+        actual_data = smart_open_object.read()
         # decompress the gzip and get the same md5 hash
-        self.assertEqual(m.hexdigest(), expected_hash)
+        self.assertEqual(actual_data, expected_data)
+
+    @responses.activate
+    def test_http_zip(self):
+        """Can open zip file member via http?"""
+        with open(os.path.join(CURR_DIR, 'test_data/cp852.tsv.txt'), "rb") as in_file:
+            data = in_file.read()
+
+        with open(os.path.join(CURR_DIR, 'test_data/two_files.zip'), 'rb') as infile:
+            zip_data = infile.read()
+
+        responses.add(responses.GET, "http://127.0.0.1/two_files.zip", body=zip_data, stream=True)
+        smart_open_object = smart_open.smart_open("http://127.0.0.1/two_files.zip#cp852.tsv.txt")
+
+        data_read = smart_open_object.read()
+
+        self.assertEqual(data, data_read)
+
+    @responses.activate
+    def test_http_tar_gz(self):
+        """Can open tar.gz file member via http?"""
+        with open(os.path.join(CURR_DIR, 'test_data/cp852.tsv.txt'), "rb") as in_file:
+            data = in_file.read()
+
+        with open(os.path.join(CURR_DIR, 'test_data/two_files.tar.gz'), 'rb') as infile:
+            zip_data = infile.read()
+
+        responses.add(responses.GET, "http://127.0.0.1/two_files.tar.gz", body=zip_data, stream=True)
+        smart_open_object = smart_open.smart_open("http://127.0.0.1/two_files.tar.gz#cp852.tsv.txt")
+
+        data_read = smart_open_object.read()
+
+        self.assertEqual(data, data_read)
 
     @responses.activate
     @unittest.skipIf(six.PY2, 'gzip support for Py2 is not implemented yet')
@@ -322,19 +354,6 @@ class SmartOpenReadTest(unittest.TestCase):
         # called with the correct path?
         mock_smart_open.assert_called_with(full_path, read_mode)
 
-        full_path = '/tmp/test#hash##more.txt'
-        read_mode = "rb"
-        smart_open_object = smart_open.smart_open(prefix+full_path, read_mode)
-        smart_open_object.__iter__()
-        # called with the correct path?
-        mock_smart_open.assert_called_with(full_path, read_mode)
-
-        full_path = 'aa#aa'
-        read_mode = "rb"
-        smart_open_object = smart_open.smart_open(full_path, read_mode)
-        smart_open_object.__iter__()
-        # called with the correct path?
-        mock_smart_open.assert_called_with(full_path, read_mode)
 
         short_path = "~/tmp/test.txt"
         full_path = os.path.expanduser(short_path)
