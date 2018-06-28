@@ -159,7 +159,7 @@ class SmartOpenHttpTest(unittest.TestCase):
             zip_data = infile.read()
 
         responses.add(responses.GET, "http://127.0.0.1/two_files.zip", body=zip_data, stream=True)
-        smart_open_object = smart_open.smart_open("http://127.0.0.1/two_files.zip#cp852.tsv.txt")
+        smart_open_object = smart_open.smart_open("http://127.0.0.1/two_files.zip", member="cp852.tsv.txt")
 
         data_read = smart_open_object.read()
 
@@ -175,7 +175,7 @@ class SmartOpenHttpTest(unittest.TestCase):
             zip_data = infile.read()
 
         responses.add(responses.GET, "http://127.0.0.1/two_files.tar.gz", body=zip_data, stream=True)
-        smart_open_object = smart_open.smart_open("http://127.0.0.1/two_files.tar.gz#cp852.tsv.txt")
+        smart_open_object = smart_open.smart_open("http://127.0.0.1/two_files.tar.gz", member="cp852.tsv.txt")
 
         data_read = smart_open_object.read()
 
@@ -354,6 +354,19 @@ class SmartOpenReadTest(unittest.TestCase):
         # called with the correct path?
         mock_smart_open.assert_called_with(full_path, read_mode)
 
+        full_path = '/tmp/test#hash##more.txt'
+        read_mode = "rb"
+        smart_open_object = smart_open.smart_open(prefix+full_path, read_mode)
+        smart_open_object.__iter__()
+        # called with the correct path?
+        mock_smart_open.assert_called_with(full_path, read_mode)
+
+        full_path = 'aa#aa'
+        read_mode = "rb"
+        smart_open_object = smart_open.smart_open(full_path, read_mode)
+        smart_open_object.__iter__()
+        # called with the correct path?
+        mock_smart_open.assert_called_with(full_path, read_mode)
 
         short_path = "~/tmp/test.txt"
         full_path = os.path.expanduser(short_path)
