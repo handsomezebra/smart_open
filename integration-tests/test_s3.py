@@ -18,6 +18,7 @@ def initialize_bucket():
 def write_read(key, content, write_mode, read_mode, encoding=None, **kwargs):
     with smart_open.smart_open(key, write_mode, encoding=encoding, **kwargs) as fout:
         fout.write(content)
+    kwargs.pop('s3_upload', None)    
     with smart_open.smart_open(key, read_mode, encoding=encoding, **kwargs) as fin:
         actual = fin.read()
     return actual
@@ -58,6 +59,27 @@ def test_s3_readwrite_binary_gzip(benchmark):
     actual = benchmark(write_read, key, binary, 'wb', 'rb')
     assert actual == binary
 
+def test_s3_readwrite_zip(benchmark):
+    def write_read_zip(key, binary):
+        with smart_open.smart_open(key, "wb", ignore_extension=True) as fout:
+            fout.write(binary)
+        with smart_open.smart_open(key, "rb", member="cp852.tsv.txt", encoding="cp852") as fin:
+            actual_text1 = fin.read()
+        with smart_open.smart_open(key, "rb", member="crime-and-punishment.txt", encoding="utf-8") as fin:
+            actual_text2 = fin.read()
+        return actual_text1, actual_text2
+
+    initialize_bucket()
+
+    key = _S3_URL + '/sanity.zip'
+    with open("smart_open/tests/test_data/two_files.zip", "rb") as in_file:
+        binary = in_file.read()
+    with open("smart_open/tests/test_data/cp852.tsv.txt", "r", encoding='cp852') as in_file:
+        text1 = in_file.read()
+    with open("smart_open/tests/test_data/crime-and-punishment.txt", "r") as in_file:
+        text2 = in_file.read()
+    actual_text1, actual_text2 = benchmark(write_read_zip, key, binary)
+    assert actual_text1 == text1 and actual_text2 == text2
 
 def test_s3_performance(benchmark):
     initialize_bucket()

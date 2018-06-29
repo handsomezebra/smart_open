@@ -132,6 +132,11 @@ def smart_open(uri, mode="rb", **kw):
     4. an instance of the boto.s3.key.Key class.
     5. an instance of the pathlib.Path class.
 
+    The supported compression format include:
+    1. a single compressed file such as ``.gz`` or ``.bz2``
+    2. a compressed archive file such as ``.zip``, ``.tar.gz``, ``.tgz`` or ``tar.bz2``
+       in this case an ``member=name`` need to be specified
+
     Examples::
 
       >>> # stream lines from http; you can use context managers too:
@@ -163,6 +168,8 @@ def smart_open(uri, mode="rb", **kw):
       >>> for line in smart_open.smart_open('/home/radim/my_file.txt'):
       ...    print line
       >>> for line in smart_open.smart_open('/home/radim/my_file.txt.gz'):
+      ...    print line
+      >>> for line in smart_open.smart_open('/home/radim/my_file.zip', member='path/to/file1.txt'):
       ...    print line
       >>> with smart_open.smart_open('/home/radim/my_file.txt.gz', 'wb') as fout:
       ...    fout.write("hello world!\n")
