@@ -41,18 +41,16 @@ class BufferedInputBase(io.BufferedIOBase):
         else:
             auth = None
 
+        self.buffer_size = buffer_size
+        self.mode = mode
+
         self.response = requests.get(url, auth=auth, stream=True, headers=_HEADERS)
 
         if not self.response.ok:
             self.response.raise_for_status()
 
-        logger.debug('self.response: %r, raw: %r', self.response, self.response.raw)
-
-        self.buffer_size = buffer_size
-        self.mode = mode
-        self._read_buffer = None
-        self._read_iter = None
-
+        self._read_iter = self.response.iter_content(self.buffer_size)
+        self._read_buffer = b''
         self._current_pos = 0
 
         #
@@ -67,6 +65,7 @@ class BufferedInputBase(io.BufferedIOBase):
         """Flush and close this stream."""
         logger.debug("close: called")
         self.response = None
+        self._read_iter = None
 
     def readable(self):
         """Return True if the stream can be read from."""
@@ -86,19 +85,21 @@ class BufferedInputBase(io.BufferedIOBase):
         """
         Mimics the read call to a filehandle object.
         """
+        logger.debug("reading with size: %d", size)
         if self.response is None:
             return ''
 
         if size == 0:
             return ''
         elif size < 0:
-            retval = self.response.raw.read()
-        else:
-            if self._read_iter is None:
-                self._read_iter = self.response.iter_content(self.buffer_size)
+            if len(self._read_buffer):
+                retval = self._read_buffer + self.response.raw.read()
                 self._read_buffer = b''
-
+            else:
+                retval = self.response.raw.read()
+        else:
             while len(self._read_buffer) < size:
+                logger.debug("http reading more content at current_pos: %d with size: %d", self._current_pos, size)
                 try:
                     self._read_buffer += next(self._read_iter)
                 except StopIteration:
@@ -155,6 +156,8 @@ class SeekableBufferedInputBase(BufferedInputBase):
         else:
             self.auth = None
 
+        self.buffer_size = buffer_size
+        self.mode = mode
         self.response = self._partial_request()
 
         if not self.response.ok:
@@ -162,7 +165,6 @@ class SeekableBufferedInputBase(BufferedInputBase):
 
         logger.debug('self.response: %r, raw: %r', self.response, self.response.raw)
 
-        self._current_pos = 0
         self._seekable = True
 
         self.content_length = int(self.response.headers.get("Content-Length", -1))
@@ -171,10 +173,9 @@ class SeekableBufferedInputBase(BufferedInputBase):
         if self.response.headers.get("Accept-Ranges", "none").lower() != "bytes":
             self._seekable = False
 
-        self.buffer_size = buffer_size
-        self.mode = mode
-        self._read_buffer = None
-        self._read_iter = None
+        self._read_iter = self.response.iter_content(self.buffer_size)
+        self._read_buffer = b''
+        self._current_pos = 0
 
         #
         # This member is part of the io.BufferedIOBase interface.
@@ -205,18 +206,24 @@ class SeekableBufferedInputBase(BufferedInputBase):
         new_pos = _clamp(new_pos, 0, self.content_length)
 
         if self._current_pos != new_pos:
+            logger.debug("http seeking from current_pos: %d to new_pos: %d", self._current_pos, new_pos)
+
             self._current_pos = new_pos
-            self._read_buffer = None
-            self._read_iter = None
-            response = self._partial_request(new_pos)
-            if response.ok:
-                self.response = response
-            else:
+
+            if new_pos == self.content_length:
                 self.response = None
+                self._read_iter = None
+                self._read_buffer = b''
+            else:
+                response = self._partial_request(new_pos)
+                if response.ok:
+                    self.response = response
+                    self._read_iter = self.response.iter_content(self.buffer_size)
+                    self._read_buffer = b''
+                else:
+                    self.response = None
 
-            logger.debug('new_position: %r', new_pos)
-
-        return new_pos
+        return self._current_pos
 
     def tell(self):
         return self._current_pos

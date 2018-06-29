@@ -560,7 +560,20 @@ def _need_to_buffer(file_obj, mode, ext):
         return False
 
 
-def _compression_wrapper(file_obj, compression_ext, fragment, mode):
+def _get_tar_member_file(tar_f, member_name):
+    tarinfo = tar_f.next()
+    while True:
+        if tarinfo is None or tarinfo.name == member_name:
+            break
+        tarinfo = tar_f.next()
+
+    if tarinfo is None:
+        raise RuntimeError("member %s not found in the tar file" % member_name)
+
+    return tar_f.extractfile(tarinfo)
+
+
+def _compression_wrapper(file_obj, compression_ext, member, mode):
     """
     This function will wrap the file_obj with an appropriate
     [de]compression mechanism based on the extension of the filename.
@@ -581,13 +594,13 @@ def _compression_wrapper(file_obj, compression_ext, fragment, mode):
         return gzip.GzipFile(fileobj=file_obj, mode=mode)
     elif compression_ext in ('.tgz', ".tar.gz"):
         tar = tarfile.open(fileobj=file_obj, mode=mode[0] + ":gz")
-        return tar.extractfile(fragment)
+        return _get_tar_member_file(tar, member)
     elif compression_ext == '.tar.bz2':
         tar = tarfile.open(fileobj=file_obj, mode=mode[0] + ":bz2")
-        return tar.extractfile(fragment)
+        return _get_tar_member_file(tar, member)
     elif compression_ext == '.zip':
         zf = zipfile.ZipFile(file_obj, mode=mode[0])
-        return zf.open(fragment, mode=mode[0])
+        return zf.open(member, mode=mode[0])
     else:
         return file_obj
 
